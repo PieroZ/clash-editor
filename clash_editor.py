@@ -68,7 +68,7 @@ UNIT_TYPES = {
     5: "CAVL",   6: "CAVH",   7: "RYC",    8: "DRAG",    9: "ARCH",
     10: "KUSZA", 11: "MUSZK", 12: "KATAP", 13: "TARAN",  14: "ARMAT",
     15: "LESN",  16: "GORAL", 17: "BUDOW", 18: "WORM",  19: "SLON",
-    20: "CYKL",  21: "TROL",  22: "SCROP", 23: "SZK",  24: "MAG",
+    20: "CYKL",  21: "TROL",  22: "SCORP", 23: "SZK",  24: "MAG",
     25: "DUCH",  26: "ORZEL", 27: "PEGAZ", 28: "SKRZ",  29: "WAZKA",
     30: "SMOK",  31: "GOLD",  32: "PEAS",  33: "SPEC", 34: "SPECK",
 }
