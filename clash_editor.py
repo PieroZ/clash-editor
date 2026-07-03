@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 
@@ -9,8 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox
 )
 from PySide6.QtGui import QPixmap, QIcon, QAction, QActionGroup, QPen, QColor
-from PySide6.QtCore import Qt
-from fontTools.pens.qtPen import QtPen
+from PySide6.QtCore import Qt, QSize
 
 TILE_SIZE = 64
 
@@ -44,6 +44,98 @@ FIELD_LABELS = [
 ]
 
 
+
+# ---- Units
+UNIT_TEX_DIR = "res/normal"
+DEFAULT_UNIT_COLOR = 1 #red,blue,yellow,white,green
+UNIT_REC_SIZE = 62
+SQUAD_MEMBER_STRIDE = 31
+MAX_UNITS_PER_TILE = 10
+
+UNIT_TYPES = {
+    0: "PEON",   1: "INFL",   2: "INFH",   3: "SPRL",   4: "SPRH",
+    5: "CAVL",   6: "CAVH",   7: "RYC",    8: "DRAG",    9: "ARCH",
+    10: "KUSZA", 11: "MUSZK", 12: "KATAP", 13: "TARAN",  14: "ARMAT",
+    15: "LESN",  16: "GORAL", 17: "BUDOW", 18: "WORM",  19: "SLON",
+    20: "CYKL",  21: "TROL",  22: "SCROP", 23: "SZK",  24: "MAG",
+    25: "DUCH",  26: "ORZEL", 27: "PEGAZ", 28: "SKRZ",  29: "WAZKA",
+    30: "SMOK",  31: "GOLD",  32: "PEAS",  33: "SPEC", 34: "SPECK",
+}
+
+
+UNIT_NAMES = {
+    0: "Pospolite ruszenie",
+    1: "Lekka piechota",
+    2: "Ciężka piechota",
+    3: "Pikinier",
+    4: "Halabardnik",
+
+    5: "Lekka jazda",
+    6: "Ciężka jazda",
+    7: "Rycerstwo",
+    8: "Dragon",
+    9: "Łucznik",
+
+    10: "Kusznik",
+    11: "Muszkieter",
+    12: "Katapulta",
+    13: "Taran",
+    14: "Armata",
+
+    15: "Leśnik",
+    16: "Góral",
+    17: "Budowniczy",
+    18: "Czerw",
+    19: "Słoń",
+
+    20: "Cyklop",
+    21: "Troll",
+    22: "Skorpion",
+    23: "Szkielet",
+    24: "Mag",
+
+    25: "Duch",
+    26: "Orzeł",
+    27: "Pegaz",
+    28: "Skrzydlak",
+    29: "Ważka",
+
+    30: "Smok",
+    31: "Złoto",
+    32: "Chłopi",
+    33: "Dowódca (syn)",
+    34: "Dowódca (córka)",
+}
+
+UNIT_VALID_TYPES = set(UNIT_TYPES.keys())
+
+
+def find_units_in_data(data):
+    squads = []
+    n = len(data)
+    for b in range(HEADER_SIZE, n - UNIT_REC_SIZE):
+        if(data[b+55] == 0x80
+            and data[b+58] == 0xAA and data[b+59] == 0xAB):
+            x = data[b+6] | (data[b + 7] << 8)
+            t = data[b+12]
+            if t not in UNIT_VALID_TYPES or x>= GRID_W:
+                continue
+            y = data[b+ 8] | (data[b + 9] << 8)
+            if y >= GRID_H:
+                continue
+            members = []
+            for k in range(MAX_UNITS_PER_TILE):
+                o = b + 12 + SQUAD_MEMBER_STRIDE * k
+                lo, hi = data[o], data[o + 1]
+                if hi != 0 or lo not in UNIT_VALID_TYPES:
+                    break
+                members.append(lo)
+            if members:
+                squads.append({
+                    "x":x, "y":y, "offset": b,
+                    "color": DEFAULT_UNIT_COLOR, "members": members
+                })
+    return squads
 # ---------------- TILE ----------------
 class Tile:
     def __init__(self, raw=None):
@@ -85,6 +177,7 @@ class MapEditor(QGraphicsView):
         self.selected_tex = 0
         self.mode = "select"
         self.inspector = None
+        self.squad_panel = None
         self.selected_cell = None
 
         self.scene = QGraphicsScene()
@@ -97,6 +190,8 @@ class MapEditor(QGraphicsView):
 
 
 
+        self.units = []
+        self.unit_tex_cache = {}
         self.sel_rect = None
 
         self.setMouseTracking(True)
@@ -129,11 +224,91 @@ class MapEditor(QGraphicsView):
                     self._add_tex(road, x, y)
 
         self.sel_rect = QGraphicsRectItem(0, 0, TILE_SIZE, TILE_SIZE)
+        self._draw_units()
+
         self.sel_rect.setPen(QPen(QColor(255,0,0), 3))
         self.sel_rect.setZValue(1000)
         self.sel_rect.setVisible(False)
         self.scene.addItem(self.sel_rect)
         self._update_sel_rect()
+
+
+    # ------------- UNITS -------------------
+    def _unit_pixmap(self, type_id, color, frame=0):
+        prefix = UNIT_TYPES.get(type_id)
+        if not prefix:
+            return None
+        key = (prefix, color, frame)
+        if key in self.unit_tex_cache:
+            return self.unit_tex_cache[key]
+        folder = f"{prefix}{color}_S32"
+        path = os.path.join(UNIT_TEX_DIR, folder, f"{folder}_{frame}.png")
+        pix = None
+        if os.path.exists(path):
+            p = QPixmap(path)
+            if not p.isNull():
+                pix = p
+        self.unit_tex_cache[key] = pix
+        return pix
+
+    def _draw_units(self):
+        for sq in self.units:
+            self._draw_squad(sq)
+
+    def _draw_squad(self, squad):
+        tx, ty = squad["x"], squad["y"]
+        color = squad.get("color", DEFAULT_UNIT_COLOR)
+        members = squad["members"]
+        if not members:
+            return
+        leader = members[0]
+        pix = self._unit_pixmap(leader, color, 0)
+        if pix is None:
+            return
+        scaled = pix.scaled(
+            TILE_SIZE, TILE_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        px = tx * TILE_SIZE  + (TILE_SIZE - scaled.width()) / 2
+        py = ty * TILE_SIZE + (TILE_SIZE - scaled.height()) / 2
+        item = self.scene.addPixmap(scaled)
+        item.setOffset(px, py)
+        item.setZValue(500)
+
+    def squad_at(self, x,y):
+        for sq in self.units:
+            if sq["x"] == x and sq["y"] == y:
+                return sq
+        return None
+
+
+    def _draw_unit_group(self, tx, ty, group):
+        n = len(group)
+        cols = max(1, math.ceil(math.sqrt(n)))
+        rows = max(1, math.ceil(n / cols))
+        cell = TILE_SIZE / max(cols, rows)
+        base_x = tx * TILE_SIZE
+        base_y = ty * TILE_SIZE
+        for i, u in enumerate(group):
+            pix = self._unit_pixmap(u)
+            if pix is None:
+                continue
+            side = max(8, int(cell))
+            scaled = pix.scaled(
+                side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            c = i % cols
+            r = i // cols
+            px = base_x + c * cell + (cell - scaled.width()) / 2
+            py = base_y + r * cell + ( cell - scaled.height()) / 2
+            item = self.scene.addPixmap(scaled)
+            item.setOffset(px,py)
+            item.setZValue(500)
+
+    def load_units(self, path):
+        with open(path, "rb") as f:
+            data = f.read()
+        self.units = find_units_in_data(data)
+        self.draw_map()
 
     def _update_sel_rect(self):
         if self.selected_cell is None:
@@ -159,6 +334,8 @@ class MapEditor(QGraphicsView):
         self._update_sel_rect()
         if self.inspector:
             self.inspector.load_tile(x, y, self.map[x][y])
+        if self.squad_panel:
+            self.squad_panel.load_squad(x, y, self.squad_at(x, y))
 
     def paint_tile(self, x, y):
         self.map[x][y].tex_id = self.selected_tex
@@ -269,6 +446,42 @@ class TexturePanel(QDockWidget):
         self.preview.setText(f"Selected: {tex_id}")
         self.on_select(tex_id)
 
+
+
+# --------------- SQUAD PANEL -------------------
+class SquadPanel(QDockWidget):
+    def __init__(self, editor):
+        super().__init__("Squad")
+        self.editor = editor
+
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        self.header = QLabel("Brak zaznaczenia")
+        layout.addWidget(self.header)
+
+        self.list = QListWidget()
+        self.list.setIconSize(QSize(32, 32))
+        layout.addWidget(self.list)
+
+        self.setWidget(widget)
+
+    def load_squad(self, x, y, squad):
+        self.list.clear()
+        if squad is None:
+            self.header.setText(f"Kafelek ({x}, {y}): brak oddzialu")
+            return
+        members = squad.get("members",[])
+        color = squad.get("color", DEFAULT_UNIT_COLOR)
+        self.header.setText(f"Kafelek ({x}, {y}): oddzial {len(members)}-osobowy")
+        for i, type_id in enumerate(members):
+            name = UNIT_NAMES.get(type_id, f"typ {type_id}")
+            role = "dowodca" if i == 0 else f"jednostka { i + 1}"
+            item = QListWidgetItem(f"{name} {role}")
+            pix = self.editor._unit_pixmap(type_id, color, 0)
+            if pix is not None:
+                item.setIcon(QIcon(pix))
+            self.list.addItem(item)
 
 # ---------------- TILE INSPECTOR ---------------
 class TileInspector(QDockWidget):
@@ -457,6 +670,10 @@ class MainWindow(QMainWindow):
         editor.inspector = self.inspector
         self.addDockWidget(Qt.RightDockWidgetArea, self.inspector)
 
+        self.squad_panel = SquadPanel(editor)
+        editor.squad_panel = self.squad_panel
+        self.addDockWidget(Qt.RightDockWidgetArea, self.squad_panel)
+
         self.create_toolbar()
 
     def create_toolbar(self):
@@ -498,6 +715,7 @@ if __name__ == "__main__":
 
     editor = MapEditor(GRID_W, GRID_H, textures)
     editor.load_dat("1.DAT")
+    editor.load_units("1.DAT")
 
     panel = TexturePanel(textures, editor.set_selected_texture)
 
