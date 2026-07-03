@@ -52,6 +52,14 @@ UNIT_REC_SIZE = 62
 SQUAD_MEMBER_STRIDE = 31
 MAX_UNITS_PER_TILE = 10
 
+# Oddzialy sa zapisane jako sloty co 725 bajtow (SQUAD_SLOT), poczawszy od
+# SUQAD_ANCHOR. Kazdy slot to naglowek oddzialu; wlasciciel (gracz) jest w bajcie +10 (0=czerwony, 1=niebieski,...)
+
+UNIT_SECTION_OFFSET = 140016
+SQUAD_ANCHOR = 0x023EF0
+SQUAD_SLOT = 0x2D5                  # 725 bajtow na slot oddzialu
+MAX_OWNER = 4                       # 0..4 -> 5 kolorow graczy
+
 UNIT_TYPES = {
     0: "PEON",   1: "INFL",   2: "INFH",   3: "SPRL",   4: "SPRH",
     5: "CAVL",   6: "CAVH",   7: "RYC",    8: "DRAG",    9: "ARCH",
@@ -113,28 +121,35 @@ UNIT_VALID_TYPES = set(UNIT_TYPES.keys())
 def find_units_in_data(data):
     squads = []
     n = len(data)
-    for b in range(HEADER_SIZE, n - UNIT_REC_SIZE):
-        if(data[b+55] == 0x80
-            and data[b+58] == 0xAA and data[b+59] == 0xAB):
-            x = data[b+6] | (data[b + 7] << 8)
-            t = data[b+12]
-            if t not in UNIT_VALID_TYPES or x>= GRID_W:
-                continue
-            y = data[b+ 8] | (data[b + 9] << 8)
-            if y >= GRID_H:
-                continue
-            members = []
-            for k in range(MAX_UNITS_PER_TILE):
-                o = b + 12 + SQUAD_MEMBER_STRIDE * k
-                lo, hi = data[o], data[o + 1]
-                if hi != 0 or lo not in UNIT_VALID_TYPES:
-                    break
-                members.append(lo)
-            if members:
-                squads.append({
-                    "x":x, "y":y, "offset": b,
-                    "color": DEFAULT_UNIT_COLOR, "members": members
-                })
+    if SQUAD_ANCHOR >= n - UNIT_REC_SIZE:
+        return squads
+    kmax = (n - UNIT_REC_SIZE - SQUAD_ANCHOR) // SQUAD_SLOT
+    for k in range(kmax + 1):
+        b = SQUAD_ANCHOR + k * SQUAD_SLOT
+        if b < UNIT_SECTION_OFFSET:
+            continue
+        t = data[b + 12]
+        if t not in UNIT_VALID_TYPES or data[b + 13] != 0:
+            continue
+        owner = data[b + 10]
+        if owner > MAX_OWNER:
+            continue
+        x = data[b+6] | (data[b + 7] << 8)
+        y = data[b + 8] | (data[b + 9] << 8)
+        if x>= GRID_W or y >+ GRID_H or (x==0 and y==0):
+            continue
+        members = []
+        for j in range(MAX_UNITS_PER_TILE):
+            o = b + 12 + SQUAD_MEMBER_STRIDE * j
+            lo, hi = data[o], data[o + 1]
+            if hi != 0 or lo not in UNIT_VALID_TYPES:
+                break
+            members.append(lo)
+        if members:
+            squads.append({
+                "x" : x, "y": y, "offset": b, "owner": owner,
+                "color": owner + 1, "members": members,
+            })
     return squads
 # ---------------- TILE ----------------
 class Tile:
@@ -714,8 +729,8 @@ if __name__ == "__main__":
     textures = load_textures("textures")
 
     editor = MapEditor(GRID_W, GRID_H, textures)
-    editor.load_dat("1.DAT")
-    editor.load_units("1.DAT")
+    editor.load_dat("a.DAT")
+    editor.load_units("a.DAT")
 
     panel = TexturePanel(textures, editor.set_selected_texture)
 
