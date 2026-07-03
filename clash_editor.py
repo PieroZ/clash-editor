@@ -4,13 +4,14 @@ import sys
 
 from PySide6.QtWidgets import (
     QApplication, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
+    QGraphicsSimpleTextItem,
     QDockWidget, QListWidget, QListWidgetItem,
     QLabel, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QMainWindow, QToolBar, QSpinBox, QLineEdit, QCheckBox, QPushButton,
-    QGroupBox
+    QGroupBox, QFileDialog, QComboBox
 )
-from PySide6.QtGui import QPixmap, QIcon, QAction, QActionGroup, QPen, QColor
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap, QIcon, QAction, QActionGroup, QPen, QColor, QFont
+from PySide6.QtCore import Qt, QSize, QDir
 
 TILE_SIZE = 64
 
@@ -59,6 +60,8 @@ UNIT_SECTION_OFFSET = 140016
 SQUAD_ANCHOR = 0x023EF0
 SQUAD_SLOT = 0x2D5                  # 725 bajtow na slot oddzialu
 MAX_OWNER = 4                       # 0..4 -> 5 kolorow graczy
+
+OWNER_NAMES = ["Czerwony", "Niebieski", "Zolty", "Bialy", "Zielony"]
 
 UNIT_TYPES = {
     0: "PEON",   1: "INFL",   2: "INFH",   3: "SPRL",   4: "SPRH",
@@ -144,6 +147,8 @@ def find_units_in_data(data):
             lo, hi = data[o], data[o + 1]
             if hi != 0 or lo not in UNIT_VALID_TYPES:
                 break
+            if data[o +2] != owner:
+                break
             members.append(lo)
         if members:
             squads.append({
@@ -194,7 +199,8 @@ class MapEditor(QGraphicsView):
         self.inspector = None
         self.squad_panel = None
         self.selected_cell = None
-
+        self.current_path = None
+        self.palette = DEFAULT_PALETTE
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
 
@@ -208,6 +214,9 @@ class MapEditor(QGraphicsView):
         self.units = []
         self.unit_tex_cache = {}
         self.sel_rect = None
+
+        self._nav_index = -1
+        self._nav_owner = "unset"
 
         self.setMouseTracking(True)
         self.draw_map()
@@ -289,40 +298,56 @@ class MapEditor(QGraphicsView):
         item.setOffset(px, py)
         item.setZValue(500)
 
+        self._draw_squad_count(tx, ty, len(members))
+
+    def _draw_squad_count(self, tx, ty, count):
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(18)
+        text = QGraphicsSimpleTextItem(str(count))
+        text.setFont(font)
+        text.setBrush(QColor(255,255,0))
+        text.setPen(QPen(QColor(0,0,0),2))
+        br = text.boundingRect()
+        text.setPos(
+            tx * TILE_SIZE + TILE_SIZE - br.width() - 3,
+            ty * TILE_SIZE + TILE_SIZE - br.height() - 2,
+        )
+        text.setZValue(600)
+        self.scene.addItem(text)
+
     def squad_at(self, x,y):
         for sq in self.units:
             if sq["x"] == x and sq["y"] == y:
                 return sq
         return None
 
-
-    def _draw_unit_group(self, tx, ty, group):
-        n = len(group)
-        cols = max(1, math.ceil(math.sqrt(n)))
-        rows = max(1, math.ceil(n / cols))
-        cell = TILE_SIZE / max(cols, rows)
-        base_x = tx * TILE_SIZE
-        base_y = ty * TILE_SIZE
-        for i, u in enumerate(group):
-            pix = self._unit_pixmap(u)
-            if pix is None:
-                continue
-            side = max(8, int(cell))
-            scaled = pix.scaled(
-                side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-            c = i % cols
-            r = i // cols
-            px = base_x + c * cell + (cell - scaled.width()) / 2
-            py = base_y + r * cell + ( cell - scaled.height()) / 2
-            item = self.scene.addPixmap(scaled)
-            item.setOffset(px,py)
-            item.setZValue(500)
+    def goto_next_squad(self, owner=None):
+        squads = [
+            s for s in self.units
+            if owner is None or s["owner"] == owner
+        ]
+        if not squads:
+            return None
+        squads.sort(key=lambda s: (s["y"], s["x"]))
+        if self._nav_owner != owner:
+            self._nav_owner = owner
+            self._nav_index = -1
+        self._nav_index = (self._nav_index +1) % len(squads)
+        sq = squads[self._nav_index]
+        self.select_cell(sq["x"], sq["y"])
+        self.centerOn(
+            (sq["x"] + 0.5) * TILE_SIZE,
+            (sq["y"] + 0.5) * TILE_SIZE,
+        )
+        return sq
 
     def load_units(self, path):
         with open(path, "rb") as f:
             data = f.read()
         self.units = find_units_in_data(data)
+        self._nav_index = -1
+        self._nav_owner = "unset"
         self.draw_map()
 
     def _update_sel_rect(self):
@@ -375,6 +400,11 @@ class MapEditor(QGraphicsView):
     def set_selected_texture(self, tex_id):
         self.selected_tex = tex_id
 
+    def set_textures(self, textures):
+        """Podmienia palete tekstur kafelków i przerysowuje mape."""
+        self.textures = textures
+        self.draw_map()
+
     def set_mode(self, mode):
         self.mode = mode
 
@@ -384,6 +414,7 @@ class MapEditor(QGraphicsView):
 
     # ---------------- LOAD (full 14-byte records) ----------------
     def load_dat(self, path):
+        self.current_path = path
         with open(path, "rb") as f:
             f.seek(HEADER_SIZE)
             for x in range(self.width):
@@ -394,6 +425,11 @@ class MapEditor(QGraphicsView):
                         return
                     self.map[x][y] = Tile(data)
         self.draw_map()
+
+    def load_file(self, path):
+        self.load_dat(path)
+        self.load_units(path)
+
 
     # ---------------- PATCH SAVE (full tile records) ----------------
     def save_dat_patch(self, input_path, output_path):
@@ -409,6 +445,16 @@ class MapEditor(QGraphicsView):
         with open(output_path, "wb") as f:
             f.write(data)
 
+
+TILE_TEX_DIR = "res/normal"
+TILE_PALETTES = [
+    "BACKGR1_S32", "BACKGR2_S32", "BACKGR3_S32",
+    "BAT_BKG1_S32", "BAT_BKG2_S32", "BAT_BKG3_S32",
+]
+DEFAULT_PALETTE = "BACKGR1_S32"
+
+def palette_folder(palette):
+    return os.path.join(TILE_TEX_DIR, palette)
 
 # ---------------- TEXTURE LOADER ----------------
 def load_textures(folder):
@@ -455,6 +501,12 @@ class TexturePanel(QDockWidget):
             item.setData(Qt.UserRole, tex_id)
             item.setIcon(QIcon(pix.scaled(64, 64)))
             self.list.addItem(item)
+
+    def set_textures(self, textures):
+        """Odswieza liste pogladow po zmianie palety"""
+        self.textures = textures
+        self.list.clear()
+        self.fill()
 
     def pick(self, item):
         tex_id = item.data(Qt.UserRole)
@@ -676,6 +728,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.editor = editor
+        self.panel=panel
         self.setWindowTitle("Clash Map Editor")
 
         self.setCentralWidget(editor)
@@ -694,6 +747,34 @@ class MainWindow(QMainWindow):
     def create_toolbar(self):
         tb = QToolBar("Main")
         self.addToolBar(tb)
+
+        open_action = QAction("Wczytaj plik", self)
+        open_action.triggered.connect(self.open_file)
+        tb.addAction(open_action)
+
+        tb.addSeparator()
+
+        tb.addWidget(QLabel(" Paleta: "))
+        self.palette_combo = QComboBox()
+        self.palette_combo.addItems(TILE_PALETTES)
+        self.palette_combo.setCurrentText(self.editor.palette)
+        self.palette_combo.currentTextChanged.connect(self.change_palette)
+        tb.addWidget(self.palette_combo)
+
+        tb.addSeparator()
+
+        tb.addWidget(QLabel(" Gracz: "))
+        self.player_combo = QComboBox()
+        self.player_combo.addItem("Wszyscy")
+        self.player_combo.addItems(OWNER_NAMES)
+        tb.addWidget(self.player_combo)
+
+        next_squad_action = QAction("Nastepny oddzial", self)
+        next_squad_action.triggered.connect(self.next_squad)
+        tb.addAction(next_squad_action)
+
+
+        tb.addSeparator()
 
 
         group = QActionGroup(self)
@@ -717,20 +798,52 @@ class MainWindow(QMainWindow):
 
         tb.addAction(save_action)
 
+    def open_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Wczytaj plik mapy", "",
+                                              "Pliki Clash (*.DAT);;Wszystkie pliki (*.*)"
+                                              )
+        if not path:
+            return
+        self.editor.load_file(path)
+        self.setWindowTitle("Clash Map Editor - {os.path.basename(path)}")
+
+    def change_palette(self, palette):
+        """Przelacza palete tekstur kafelkow i odswieza widok oraz panel."""
+        textures = load_textures(palette_folder(palette))
+        self.editor.palette = palette
+        self.editor.set_textures(textures)
+        self.panel.set_textures(textures)
+
+    def next_squad(self):
+        idx = self.player_combo.currentIndex()
+        owner = None if idx == 0 else idx - 1
+        sq = self.editor.goto_next_squad(owner)
+        if sq is None:
+            who = "zadnego gracza" if owner is None else OWNER_NAMES[owner]
+            self.statusBar().showMessage(f"Brak oddzialow: {who}", 3000)
+        else:
+            self.statusBar().showMessage(
+                f"Oddzial ({sq['x']}, {sq['y']}) - {len(sq['members'])} jednostek",
+            )
+
+
+
     def save_patch(self):
-        self.editor.save_dat_patch("1.DAT", "1_MOD.DAT")
-        print("PATCH SAVED -> 1_MOD.DAT")
+        src = self.editor.current_path or "1.DAT"
+        base, ext = os.path.splitext(src)
+        out = f"{base}_MOD{ext or '.DAT'}"
+        self.editor.save_dat_patch(src, out)
+        print(f"PATCH SAVED -> {out}")
 
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    textures = load_textures("textures")
+    textures = load_textures(palette_folder(DEFAULT_PALETTE))
 
     editor = MapEditor(GRID_W, GRID_H, textures)
-    editor.load_dat("a.DAT")
-    editor.load_units("a.DAT")
+    editor.load_file("1.DAT")
 
     panel = TexturePanel(textures, editor.set_selected_texture)
 
