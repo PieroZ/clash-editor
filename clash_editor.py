@@ -3,12 +3,12 @@ import os
 import sys
 
 from PySide6.QtWidgets import (
-    QApplication, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
+    QApplication, QStyleFactory, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
     QGraphicsSimpleTextItem,
     QDockWidget, QListWidget, QListWidgetItem,
     QLabel, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QMainWindow, QToolBar, QSpinBox, QLineEdit, QCheckBox, QPushButton,
-    QGroupBox, QFileDialog, QComboBox
+    QGroupBox, QFileDialog, QComboBox, QTabWidget
 )
 from PySide6.QtGui import QPixmap, QIcon, QAction, QActionGroup, QPen, QColor, QFont
 from PySide6.QtCore import Qt, QSize, QDir
@@ -120,6 +120,53 @@ UNIT_NAMES = {
 
 UNIT_VALID_TYPES = set(UNIT_TYPES.keys())
 
+UNIT_HP_MAX = 100
+UNIT_STATS = {
+    0:  {"move": 24, "morale": 10, "attack": 1,  "armor": 1,  "ranged": 0},
+    1:  {"move": 20, "morale": 10, "attack": 5,  "armor": 4,  "ranged": 0},
+    2:  {"move": 20, "morale": 10, "attack": 9,  "armor": 6,  "ranged": 0},
+    3:  {"move": 24, "morale": 10, "attack": 3,  "armor": 5,  "ranged": 0},
+    4:  {"move": 22, "morale": 10, "attack": 5,  "armor": 5,  "ranged": 0},
+    5:  {"move": 36, "morale": 10, "attack": 8,  "armor": 5,  "ranged": 0},
+    6:  {"move": 32, "morale": 10, "attack": 14, "armor": 8,  "ranged": 0},
+    7:  {"move": 30, "morale": 10, "attack": 12, "armor": 7,  "ranged": 0},
+    8:  {"move": 32, "morale": 10, "attack": 10, "armor": 4,  "ranged": 6},
+    9:  {"move": 24, "morale": 10, "attack": 3,  "armor": 1,  "ranged": 6},
+    10: {"move": 20, "morale": 10, "attack": 5,  "armor": 2,  "ranged": 8},
+    11: {"move": 24, "morale": 10, "attack": 4,  "armor": 3,  "ranged": 11},
+    12: {"move": 20, "morale": 10, "attack": 0,  "armor": 1,  "ranged": 16},
+    13: {"move": 20, "morale": 10, "attack": 20, "armor": 10, "ranged": 0},
+    14: {"move": 16, "morale": 10, "attack": 0,  "armor": 1,  "ranged": 20},
+    15: {"move": 24, "morale": 10, "attack": 8,  "armor": 4,  "ranged": 11},
+    16: {"move": 26, "morale": 10, "attack": 8,  "armor": 6,  "ranged": 0},
+    17: {"move": 26, "morale": 10, "attack": 1,  "armor": 1,  "ranged": 0},
+    18: {"move": 18, "morale": 6,  "attack": 14, "armor": 9,  "ranged": 0},
+    19: {"move": 20, "morale": 6,  "attack": 14, "armor": 10, "ranged": 0},
+    20: {"move": 26, "morale": 6,  "attack": 10, "armor": 6,  "ranged": 10},
+    21: {"move": 22, "morale": 6,  "attack": 13, "armor": 10, "ranged": 0},
+    22: {"move": 26, "morale": 6,  "attack": 12, "armor": 8,  "ranged": 0},
+    23: {"move": 22, "morale": 6,  "attack": 13, "armor": 10, "ranged": 0},
+    24: {"move": 40, "morale": 6,  "attack": 10, "armor": 10, "ranged": 15},
+    25: {"move": 24, "morale": 6,  "attack": 10, "armor": 8,  "ranged": 0},
+    26: {"move": 34, "morale": 6,  "attack": 9,  "armor": 6,  "ranged": 0},
+    27: {"move": 30, "morale": 6,  "attack": 12, "armor": 8,  "ranged": 0},
+    28: {"move": 24, "morale": 6,  "attack": 14, "armor": 10, "ranged": 10},
+    29: {"move": 32, "morale": 6,  "attack": 8,  "armor": 5,  "ranged": 0},
+    30: {"move": 36, "morale": 6,  "attack": 18, "armor": 15, "ranged": 15},
+    31: {"move": 30, "morale": 10, "attack": 0,  "armor": 0,  "ranged": 0},
+    32: {"move": 30, "morale": 10, "attack": 0,  "armor": 2,  "ranged": 0},
+    33: {"move": 36, "morale": 10, "attack": 0,  "armor": 2,  "ranged": 0},
+    34: {"move": 36, "morale": 10, "attack": 0,  "armor": 2,  "ranged": 0},
+}
+
+M_TYPE = 0
+M_OWNER = 2
+M_MOVE = 8
+M_HP = 9
+M_FATIGUE = 10
+M_MORALE = 11
+M_ADV = 12
+
 
 def find_units_in_data(data):
     squads = []
@@ -139,7 +186,7 @@ def find_units_in_data(data):
             continue
         x = data[b+6] | (data[b + 7] << 8)
         y = data[b + 8] | (data[b + 9] << 8)
-        if x>= GRID_W or y >+ GRID_H or (x==0 and y==0):
+        if x>= GRID_W or y >= GRID_H or (x==0 and y==0):
             continue
         members = []
         for j in range(MAX_UNITS_PER_TILE):
@@ -147,9 +194,17 @@ def find_units_in_data(data):
             lo, hi = data[o], data[o + 1]
             if hi != 0 or lo not in UNIT_VALID_TYPES:
                 break
-            if data[o +2] != owner:
+            if data[o + M_OWNER] != owner:
                 break
-            members.append(lo)
+            members.append({
+                "type": lo,
+                "offset": o,
+                "move": data[o + M_MOVE],
+                "hp": data[o + M_HP],
+                "fatigue": data[o + M_FATIGUE],
+                "morale": data[o + M_MORALE],
+                "adv": data[o + M_ADV] & 0x0F,
+            })
         if members:
             squads.append({
                 "x" : x, "y": y, "offset": b, "owner": owner,
@@ -198,6 +253,7 @@ class MapEditor(QGraphicsView):
         self.mode = "select"
         self.inspector = None
         self.squad_panel = None
+        self.unit_editor = None
         self.selected_cell = None
         self.current_path = None
         self.palette = DEFAULT_PALETTE
@@ -212,6 +268,7 @@ class MapEditor(QGraphicsView):
 
 
         self.units = []
+        self.raw_data = None
         self.unit_tex_cache = {}
         self.sel_rect = None
 
@@ -285,7 +342,7 @@ class MapEditor(QGraphicsView):
         members = squad["members"]
         if not members:
             return
-        leader = members[0]
+        leader = members[0]["type"]
         pix = self._unit_pixmap(leader, color, 0)
         if pix is None:
             return
@@ -322,6 +379,243 @@ class MapEditor(QGraphicsView):
                 return sq
         return None
 
+
+    def update_member(self, squad, idx, type_id=None, hp=None, move=None,
+                      morale=None, fatigue=None, adv=None):
+        """Zapisuje zmiany statystyki członka oddziału do bufora pliku."""
+
+        if self.raw_data is None:
+            return
+
+        m = squad["members"][idx]
+        o = m["offset"]
+
+        if type_id is not None:
+            self.raw_data[o + M_TYPE] = type_id & 0xFF
+            self.raw_data[o + M_TYPE + 1] = 0
+            m["type"] = type_id
+
+        if move is not None:
+            self.raw_data[o + M_MOVE] = move & 0xFF
+            m["move"] = move & 0xFF
+
+        if hp is not None:
+            self.raw_data[o + M_HP] = hp & 0xFF
+            m["hp"] = hp & 0xFF
+
+        if fatigue is not None:
+            self.raw_data[o + M_FATIGUE] = fatigue & 0xFF
+            m["fatigue"] = fatigue & 0xFF
+
+        if morale is not None:
+            self.raw_data[o + M_MORALE] = morale & 0xFF
+            m["morale"] = morale & 0xFF
+
+        if adv is not None:
+            self.raw_data[o + M_ADV] = (self.raw_data[o + M_ADV] & 0xF0) | (adv & 0x0F)
+            m["adv"] = adv & 0x0F
+
+        self.draw_map()
+
+    def add_member(self, squad, type_id):
+        """Dodaje nową jednostkę do istniejącego oddziału (max 10)."""
+
+        # Jako szablon 31-bajtowego rekordu kopiujemy blok dowódcy
+        # (poprawna struktura), a następnie nadpisujemy typ, właściciela
+        # i statystyki domyślne dla wybranego typu
+
+        if self.raw_data is None:
+            return None
+
+        members = squad["members"]
+        n = len(members)
+
+        if n >= MAX_UNITS_PER_TILE:
+            return None
+
+        b = squad["offset"]
+        o = b + 12 + SQUAD_MEMBER_STRIDE * n
+
+        leader_o = members[0]["offset"]
+
+        self.raw_data[o:o + SQUAD_MEMBER_STRIDE] = \
+            self.raw_data[leader_o:leader_o + SQUAD_MEMBER_STRIDE]
+
+        st = UNIT_STATS.get(type_id, {})
+
+        self.raw_data[o + M_TYPE] = type_id & 0xFF
+        self.raw_data[o + M_TYPE + 1] = 0
+        self.raw_data[o + M_OWNER] = squad["owner"]
+
+        self.raw_data[o + M_MOVE] = st.get("move", 20) & 0xFF
+        self.raw_data[o + M_HP] = UNIT_HP_MAX
+        self.raw_data[o + M_FATIGUE] = 0
+        self.raw_data[o + M_MORALE] = st.get("morale", 10) & 0xFF
+        self.raw_data[o + M_ADV] = self.raw_data[o + M_ADV] & 0xF0
+
+        # Znacznik końca listy członków w kolejnym slocie (jeśli się mieści)
+        if n + 1 < MAX_UNITS_PER_TILE:
+            term = b + 12 + SQUAD_MEMBER_STRIDE * (n + 1)
+            self.raw_data[term] = 0xFF
+            self.raw_data[term + 1] = 0xFF
+
+        new_m = {
+            "type": type_id,
+            "offset": o,
+            "move": self.raw_data[o + M_MOVE],
+            "hp": UNIT_HP_MAX,
+            "fatigue": 0,
+            "morale": self.raw_data[o + M_MORALE],
+            "adv": self.raw_data[o + M_ADV] & 0x0F,
+        }
+
+        members.append(new_m)
+        self.draw_map()
+
+        return new_m
+
+    def create_squad(self, x, y, owner, type_id):
+        """Tworzy nowy oddział na pustym polu (x,y) dla danego koloru.
+
+        Kopiuje slot-szablon tego samego właściciela (poprawna struktura
+        nagłówka i danych pomocniczych), po czym ustawia pozycje, właściciela
+        i jedną jednostkę z domyślnymi statystykami.
+        """
+        if self.raw_data is None:
+            return None
+        if not (0 <= x < self.width and 0 <= y < self.height):
+            return None
+        if self.squad_at(x, y) is not None:
+            return None
+
+        b = self._find_free_slot()
+        if b is None:
+            return None
+
+        template = self._template_slot(owner)
+        if template is not None:
+            self.raw_data[b:b + SQUAD_SLOT] = \
+                self.raw_data[template:template + SQUAD_SLOT]
+        else:
+            for i in range(SQUAD_SLOT):
+                self.raw_data[b + i] = 0
+
+        # Nagłówek oddziału.
+        self.raw_data[b + 6] = x & 0xFF
+        self.raw_data[b + 7] = (x >> 8) & 0xFF
+        self.raw_data[b + 8] = y & 0xFF
+        self.raw_data[b + 9] = (y >> 8) & 0xFF
+        self.raw_data[b + 10] = owner
+        self.raw_data[b + 11] = 0
+
+        # Pierwsza (i jedyna) jednostka.
+        o = b + 12
+        st = UNIT_STATS.get(type_id, {})
+        self.raw_data[o + M_TYPE] = type_id & 0xFF
+        self.raw_data[o + M_TYPE + 1] = 0
+        self.raw_data[o + M_OWNER] = owner
+        self.raw_data[o + M_MOVE] = st.get("move", 20) & 0xFF
+        self.raw_data[o + M_HP] = UNIT_HP_MAX
+        self.raw_data[o + M_FATIGUE] = 0
+        self.raw_data[o + M_MORALE] = st.get("morale", 10) & 0xFF
+        self.raw_data[o + M_ADV] = self.raw_data[o + M_ADV] & 0xFF
+
+        # Znacznik końca listy członków po pierwszej jednostce.
+        term = b + 12 + SQUAD_MEMBER_STRIDE
+        self.raw_data[term] = 0xFF
+        self.raw_data[term + 1] = 0xFF
+
+        squad = {
+            "x": x,
+            "y": y,
+            "offset": b,
+            "owner": owner,
+            "color": owner + 1,
+            "members": [{
+                "type": type_id,
+                "offset": o,
+                "move": self.raw_data[o + M_MOVE],
+                "hp": UNIT_HP_MAX,
+                "fatigue": 0,
+                "morale": self.raw_data[o + M_MORALE],
+                "adv": self.raw_data[o + M_ADV] & 0xFF,
+            }],
+        }
+        self.units.append(squad)
+        self.draw_map()
+        return squad
+
+    def _template_slot(self, owner):
+        """Zwraca offset aktywnego oddziału jako szablon (preferuje tego samego
+        właściciela), albo None jeśli nie ma żadnego."""
+        same = [s["offset"] for s in self.units if s["owner"] == owner]
+        if same:
+            return same[0]
+        if self.units:
+            return self.units[0]["offset"]
+        return None
+
+    def _find_free_slot(self):
+        """Znajduje pierwszy wolny slot w siatce oddziałów (nieaktywny)."""
+        n = len(self.raw_data)
+        used = [s["offset"] for s in self.units]
+        kmax = (n - UNIT_REC_SIZE - SQUAD_ANCHOR) // SQUAD_SLOT
+        for k in range(kmax + 1):
+            b = SQUAD_ANCHOR + k * SQUAD_SLOT
+            if b < UNIT_SECTION_OFFSET:
+                continue
+            if b + SQUAD_SLOT > n:
+                break
+            if b in used:
+                continue
+            return b
+        return None
+
+    def remove_member(self, squad, idx):
+        """Usuwa jednostkę o indeksie idx z oddziału. Jeśli była ostatnia,
+        cały oddział jest kasowany (slot oznaczany jako pusty)."""
+        if self.raw_data is None:
+            return
+        members = squad["members"]
+        if idx < 0 or idx >= len(members):
+            return
+        n = len(members)
+        if n <= 1:
+            self.remove_squad(squad)
+            return
+
+        b = squad["offset"]
+        # Przesuwamy rekordy za usuwanym o jeden slot (31 B) w górę.
+        first = b + 12 + SQUAD_MEMBER_STRIDE * idx
+        src = b + 12 + SQUAD_MEMBER_STRIDE * (idx + 1)
+        end = b + 12 + SQUAD_MEMBER_STRIDE * n
+        self.raw_data[first:first + (end - src)] = self.raw_data[src:end]
+
+        # Nowy ostatni slot -> znacznik końca listy.
+        term = b + 12 + SQUAD_MEMBER_STRIDE * (n - 1)
+        self.raw_data[term] = 0xFF
+        self.raw_data[term + 1] = 0xFF
+
+        del members[idx]
+        for j, m in enumerate(members):
+            m["offset"] = b + 12 + SQUAD_MEMBER_STRIDE * j
+        self.draw_map()
+
+    def remove_squad(self, squad):
+        """Kasuje oddział - oznacza slot jako pusty (FFFF + pozycja 0,0)."""
+        if self.raw_data is None:
+            return
+        b = squad["offset"]
+        self.raw_data[b + 6] = 0
+        self.raw_data[b + 7] = 0
+        self.raw_data[b + 8] = 0
+        self.raw_data[b + 9] = 0
+        self.raw_data[b + 12] = 0xFF
+        self.raw_data[b + 13] = 0xFF
+        if squad in self.units:
+            self.units.remove(squad)
+            self.draw_map()
+
     def goto_next_squad(self, owner=None):
         squads = [
             s for s in self.units
@@ -344,8 +638,8 @@ class MapEditor(QGraphicsView):
 
     def load_units(self, path):
         with open(path, "rb") as f:
-            data = f.read()
-        self.units = find_units_in_data(data)
+            self.raw_data = bytearray(f.read())
+        self.units = find_units_in_data(self.raw_data)
         self._nav_index = -1
         self._nav_owner = "unset"
         self.draw_map()
@@ -376,6 +670,8 @@ class MapEditor(QGraphicsView):
             self.inspector.load_tile(x, y, self.map[x][y])
         if self.squad_panel:
             self.squad_panel.load_squad(x, y, self.squad_at(x, y))
+        if self.unit_editor:
+            self.unit_editor.load_squad(x, y, self.squad_at(x, y))
 
     def paint_tile(self, x, y):
         self.map[x][y].tex_id = self.selected_tex
@@ -432,9 +728,12 @@ class MapEditor(QGraphicsView):
 
 
     # ---------------- PATCH SAVE (full tile records) ----------------
-    def save_dat_patch(self, input_path, output_path):
-        with open(input_path, "rb") as f:
-            data = bytearray(f.read())
+    def save_dat_patch(self, output_path):
+        if self.raw_data is not None:
+            data = bytearray(self.raw_data)
+        else:
+            with open(self.current_path, "rb") as f:
+                data = bytearray(f.read())
 
         for x in range(self.width):
             for y in range(self.height):
@@ -449,7 +748,6 @@ class MapEditor(QGraphicsView):
 TILE_TEX_DIR = "res/normal"
 TILE_PALETTES = [
     "BACKGR1_S32", "BACKGR2_S32", "BACKGR3_S32",
-    "BAT_BKG1_S32", "BAT_BKG2_S32", "BAT_BKG3_S32",
 ]
 DEFAULT_PALETTE = "BACKGR1_S32"
 
@@ -541,7 +839,8 @@ class SquadPanel(QDockWidget):
         members = squad.get("members",[])
         color = squad.get("color", DEFAULT_UNIT_COLOR)
         self.header.setText(f"Kafelek ({x}, {y}): oddzial {len(members)}-osobowy")
-        for i, type_id in enumerate(members):
+        for i, m in enumerate(members):
+            type_id = m["type"]
             name = UNIT_NAMES.get(type_id, f"typ {type_id}")
             role = "dowodca" if i == 0 else f"jednostka { i + 1}"
             item = QListWidgetItem(f"{name} {role}")
@@ -549,6 +848,249 @@ class SquadPanel(QDockWidget):
             if pix is not None:
                 item.setIcon(QIcon(pix))
             self.list.addItem(item)
+
+
+class UnitEditorPanel(QDockWidget):
+    def __init__(self, editor):
+        super().__init__("Edytor jednostek")
+        self.editor = editor
+        editor.unit_editor = self
+        self.squad = None
+        self.cell = None
+        self._loading = False
+
+        widget = QWidget()
+        root = QVBoxLayout(widget)
+
+        self.header = QLabel("Brak zaznaczenia")
+        self.header.setWordWrap(True)
+        root.addWidget(self.header)
+
+        self.list = QListWidget()
+        self.list.setIconSize(QSize(32, 32))
+        self.list.currentRowChanged.connect(self._on_row_changed)
+        root.addWidget(self.list)
+
+        form_box = QGroupBox("Statystyki jednostki")
+        form = QFormLayout(form_box)
+
+        self.type_combo = QComboBox()
+        for tid in sorted(UNIT_TYPES.keys()):
+            self.type_combo.addItem(UNIT_NAMES.get(tid, f"typ {tid}"), tid)
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+        form.addRow("Typ", self.type_combo)
+
+        self.hp_spin = QSpinBox()
+        self.hp_spin.setRange(0, 100)
+        form.addRow("HP", self.hp_spin)
+
+        self.move_spin = QSpinBox()
+        self.move_spin.setRange(0, 255)
+        form.addRow("Ruch (PA)", self.move_spin)
+
+        self.morale_spin = QSpinBox()
+        self.morale_spin.setRange(0, 255)
+        form.addRow("Morale", self.morale_spin)
+
+        self.fatigue_spin = QSpinBox()
+        self.fatigue_spin.setRange(0, 255)
+        form.addRow("Zmęczenie", self.fatigue_spin)
+
+        self.adv_spin = QSpinBox()
+        self.adv_spin.setRange(0, 15)
+        form.addRow("Zaawansowanie", self.adv_spin)
+
+        root.addWidget(form_box)
+
+        self.base_label = QLabel("")
+        self.base_label.setWordWrap(True)
+        root.addWidget(self.base_label)
+
+        btns = QHBoxLayout()
+        self.apply_btn = QPushButton("Zastosuj")
+        self.apply_btn.clicked.connect(self._apply)
+        btns.addWidget(self.apply_btn)
+
+        self.default_btn = QPushButton("Domyślne statystyki")
+        self.default_btn.clicked.connect(self._fill_defaults)
+        btns.addWidget(self.default_btn)
+        self.remove_btn = QPushButton("Usun jednostke")
+        self.remove_btn.clicked.connect(self._remove)
+        btns.addWidget(self.remove_btn)
+        root.addLayout(btns)
+
+        add_box = QHBoxLayout()
+        self.add_type = QComboBox()
+        for tid in sorted(UNIT_TYPES.keys()):
+            self.add_type.addItem(UNIT_NAMES.get(tid, f"typ {tid}"), tid)
+        add_box.addWidget(self.add_type)
+
+        self.add_btn = QPushButton("Dodaj jednostkę")
+        self.add_btn.clicked.connect(self._add)
+        add_box.addWidget(self.add_btn)
+        root.addLayout(add_box)
+
+        self.create_box = QGroupBox("Nowy oddzial (na pustym polu)")
+        create_form = QFormLayout(self.create_box)
+        self.owner_combo = QComboBox()
+        for i, oname in enumerate(OWNER_NAMES):
+            self.owner_combo.addItem(oname, i)
+        create_form.addRow("Kolor", self.owner_combo)
+        self.new_type_combo = QComboBox()
+        for tid in sorted(UNIT_TYPES.keys()):
+            self.new_type_combo.addItem(UNIT_NAMES.get(tid, f"typ {tid}"), tid)
+        create_form.addRow("Typ", self.new_type_combo)
+        self.create_btn = QPushButton("Utworz oddzial tutaj")
+        self.create_btn.clicked.connect(self._create)
+        create_form.addRow(self.create_btn)
+        root.addWidget(self.create_box)
+
+        root.addStretch(1)
+        self.setWidget(widget)
+        self._set_form_enabled(False)
+
+    def _set_form_enabled(self, on):
+        for w in (self.type_combo, self.hp_spin, self.move_spin,
+                  self.morale_spin, self.fatigue_spin, self.adv_spin,
+                  self.apply_btn, self.default_btn, self.remove_btn):
+            w.setEnabled(on)
+
+    def load_squad(self, x, y, squad):
+        self.cell = (x, y)
+        self.squad = squad
+        self._loading = True
+        self.list.clear()
+        has_cell = 0 <=x < GRID_W and 0 <= y < GRID_H
+        if squad is None:
+            self.header.setText(f"Kafelek({x},{y}): brak oddziału")
+            self.base_label.setText("")
+            self.add_btn.setEnabled(False)
+            self.add_type.setEnabled(False)
+            self._set_form_enabled(False)
+            self._set_create_enabled(has_cell)
+            self._loading = False
+            return
+        self._set_create_enabled(False)
+        owner = squad["owner"]
+        owner_name = OWNER_NAMES[owner] if owner < len(OWNER_NAMES) else str(owner)
+        self.header.setText(
+            f"Kafelek({x},{y}) - {owner_name}, "
+            f"{len(squad['members'])} jednostek"
+        )
+
+        color = squad.get("color", DEFAULT_UNIT_COLOR)
+        for i, m in enumerate(squad["members"]):
+            name = UNIT_NAMES.get(m["type"], f"typ {m['type']}")
+            role = "dowodca" if i == 0 else f"jednostka {i + 1}"
+            item = QListWidgetItem(f"{name} ({role})")
+            pix = self.editor._unit_pixmap(m["type"], color, 0)
+            if pix is not None:
+                item.setIcon(QIcon(pix))
+            self.list.addItem(item)
+
+        can_add = len(squad["members"]) < MAX_UNITS_PER_TILE
+        self.add_type.setEnabled(can_add)
+        self.add_btn.setEnabled(can_add)
+        self._loading = False
+
+        if squad["members"]:
+            self.list.setCurrentRow(0)
+        else:
+            self._set_form_enabled(False)
+
+    def _set_create_enabled(self, on):
+        self.owner_combo.setEnabled(on)
+        self.new_type_combo.setEnabled(on)
+        self.create_btn.setEnabled(on)
+
+    def _on_row_changed(self, row):
+        if self._loading:
+            return
+        if self.squad is None or row < 0 or row >= len(self.squad["members"]):
+            self._set_form_enabled(False)
+            return
+
+        self._set_form_enabled(True)
+        m = self.squad["members"][row]
+        self._loading = True
+        self.type_combo.setCurrentIndex(self.type_combo.findData(m["type"]))
+        self.hp_spin.setValue(m["hp"])
+        self.move_spin.setValue(m["move"])
+        self.morale_spin.setValue(m["morale"])
+        self.fatigue_spin.setValue(m["fatigue"])
+        self.adv_spin.setValue(m["adv"])
+        self._loading = False
+        self._update_base_label(m["type"])
+
+    def _update_base_label(self, type_id):
+        st = UNIT_STATS.get(type_id)
+        if not st:
+            self.base_label.setText("")
+            return
+        self.base_label.setText(
+            f"Bazowo (wg strony): atak {st['attack']}, pancerz {st['armor']}, "
+            f"dystans {st['ranged']}. Atak/pancerz/dystans wynikają z typu i "
+            f"zaawansowania - nie są zapisywane osobno na jednostce."
+        )
+
+    def _on_type_changed(self, _idx):
+        tid = self.type_combo.currentData()
+        if tid is not None:
+            self._update_base_label(tid)
+
+    def _fill_defaults(self):
+        tid = self.type_combo.currentData()
+        st = UNIT_STATS.get(tid, {})
+        self.hp_spin.setValue(UNIT_HP_MAX)
+        self.move_spin.setValue(st.get("move", 20))
+        self.morale_spin.setValue(st.get("morale", 10))
+        self.fatigue_spin.setValue(0)
+        self.adv_spin.setValue(0)
+
+    def _apply(self):
+        row = self.list.currentRow()
+        if self.squad is None or row < 0:
+            return
+        type_id = self.type_combo.currentData()
+        self.editor.update_member(
+            self.squad, row,
+            type_id=type_id,
+            hp=self.hp_spin.value(),
+            move=self.move_spin.value(),
+            morale=self.morale_spin.value(),
+            fatigue=self.fatigue_spin.value(),
+            adv=self.adv_spin.value(),
+        )
+
+    def _add(self):
+        if self.squad is None:
+            return
+        tid = self.add_type.currentData()
+        m = self.editor.add_member(self.squad, tid)
+        if m is None:
+            return
+        self.load_squad(self.cell[0], self.cell[1], self.squad)
+        self.list.setCurrentRow(len(self.squad["members"]) - 1)
+
+    def _remove(self):
+        row = self.list.currentRow()
+        if self.squad is None or row < 0:
+            return
+        x, y = self.cell
+        self.editor.remove_member(self.squad, row)
+        self.editor.select_cell(x,y)
+
+    def _create(self):
+        if self.cell is None:
+            return
+        x, y = self.cell
+        owner = self.owner_combo.currentData()
+        tid = self.new_type_combo.currentData()
+        squad = self.editor.create_squad(x, y, owner, tid)
+        if squad is None:
+            return
+        self.editor.select_cell(x,y)
+
 
 # ---------------- TILE INSPECTOR ---------------
 class TileInspector(QDockWidget):
@@ -742,6 +1284,19 @@ class MainWindow(QMainWindow):
         editor.squad_panel = self.squad_panel
         self.addDockWidget(Qt.RightDockWidgetArea, self.squad_panel)
 
+        self.unit_editor = UnitEditorPanel(editor)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.unit_editor)
+
+        self.tabifyDockWidget(self.inspector, self.squad_panel)
+        self.tabifyDockWidget(self.squad_panel, self.unit_editor)
+
+        locked = QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
+        for dock in (panel, self.inspector, self.squad_panel, self.unit_editor):
+            dock.setFeatures(locked)
+
+        self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
+        self.inspector.raise_()
+
         self.create_toolbar()
 
     def create_toolbar(self):
@@ -805,7 +1360,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.editor.load_file(path)
-        self.setWindowTitle("Clash Map Editor - {os.path.basename(path)}")
+        self.setWindowTitle(f"Clash Map Editor - {os.path.basename(path)}")
 
     def change_palette(self, palette):
         """Przelacza palete tekstur kafelkow i odswieza widok oraz panel."""
@@ -832,13 +1387,14 @@ class MainWindow(QMainWindow):
         src = self.editor.current_path or "1.DAT"
         base, ext = os.path.splitext(src)
         out = f"{base}_MOD{ext or '.DAT'}"
-        self.editor.save_dat_patch(src, out)
+        self.editor.save_dat_patch(out)
         print(f"PATCH SAVED -> {out}")
 
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("windows11"))
 
     textures = load_textures(palette_folder(DEFAULT_PALETTE))
 
