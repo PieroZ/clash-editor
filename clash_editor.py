@@ -187,6 +187,51 @@ M_FATIGUE = 10
 M_MORALE = 11
 M_ADV = 12
 
+FOG_BASE = 140084
+FOG_PLAYER_STRIDE = 1423
+FOG_COL_STRIDE = 13
+FOG_VISION_RADIUS = 6
+
+# occupancy grid
+UNIT_INDEX_BASE = 556390
+UNIT_INDEX_COL_STRIDE = 200
+UNIT_INDEX_EMPTY = 0xFFFF
+
+
+def set_unit_index_cell(data, x, y, value):
+    return
+    if data is None or not ( 0 <= x < GRID_W and 0 <= y < GRID_H ):
+        return
+    off = UNIT_INDEX_BASE + x * UNIT_INDEX_COL_STRIDE + y * 2
+    if 0 <= off < len(data)-1:
+        data[off] = value & 0xFF
+        data[off + 1] = (value >> 8) & 0xFF
+
+
+def reveal_fog_area(data, x, y, owner, radius=FOG_VISION_RADIUS):
+    if data is None or not (0 <= owner <= MAX_OWNER):
+        return 0
+    base = FOG_BASE + owner * FOG_PLAYER_STRIDE
+    revealed = 0
+    r2 = radius * radius + radius
+    for dy in range(-radius, radius + 1):
+        ty = y + dy
+        if not (0 <= ty < GRID_H):
+            continue
+        for dx in range(-radius, radius + 1):
+            tx = x + dx
+            if not (0 <= tx < GRID_W):
+                continue
+            if dx * dx + dy * dy > r2:
+                continue
+            off = base + tx * FOG_COL_STRIDE + (ty >> 3)
+            if 0 <= off < len(data):
+                bit = 1 << (ty & 7)
+                if not (data[off] & bit):
+                    data[off] |= bit
+                    revealed += 1
+    return revealed
+
 
 def find_units_in_data(data):
     squads = []
@@ -657,6 +702,11 @@ class MapEditor(QGraphicsView):
         self.raw_data[term] = 0xFF
         self.raw_data[term + 1] = 0xFF
 
+        reveal_fog_area(self.raw_data, x, y, owner)
+
+        k = (b - SQUAD_SLOT) // SQUAD_SLOT
+        set_unit_index_cell(self.raw_data,x,y,k)
+
         squad = {
             "x": x,
             "y": y,
@@ -744,6 +794,7 @@ class MapEditor(QGraphicsView):
         self.raw_data[b + 9] = 0
         self.raw_data[b + 12] = 0xFF
         self.raw_data[b + 13] = 0xFF
+        set_unit_index_cell(self.raw_data, squad["x"], squad["y"], UNIT_INDEX_EMPTY)
         if squad in self.units:
             self.units.remove(squad)
             self.draw_map()
