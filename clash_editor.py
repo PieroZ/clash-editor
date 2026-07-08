@@ -63,6 +63,26 @@ MAX_OWNER = 4                       # 0..4 -> 5 kolorow graczy
 
 OWNER_NAMES = ["Czerwony", "Niebieski", "Zolty", "Bialy", "Zielony"]
 
+BUILDING_TEX_DIR = "res/minimum"
+BUILDING_SCAN_START = 0x028000
+BUILDING_TABLE_BASE = 0x7C6FA
+BUILDING_REC_SIZE = 467
+BUILDING_EMPTY_TYPE = 0xFF
+CASTLE_TYPE = 2
+CASTLE_SIZE = 2
+CASTLE_BASE_TEX = 237
+CASTLE_OWNER_TEX_STRIDE = 40
+
+
+
+BUILDING_TYPE_TEX = {
+    0: (1, 12, 1), # wieza
+    1: (2, 93, 4), # twierdza
+    2: (2, 237, 40), # zamek
+}
+
+BUILDING_DEFAULT_TEX = (2, 237, 40)
+
 UNIT_TYPES = {
     0: "PEON",   1: "INFL",   2: "INFH",   3: "SPRL",   4: "SPRH",
     5: "CAVL",   6: "CAVH",   7: "RYC",    8: "DRAG",    9: "ARCH",
@@ -211,6 +231,69 @@ def find_units_in_data(data):
                 "color": owner + 1, "members": members,
             })
     return squads
+
+def find_buildings_in_data(data):
+    # byte0=x
+    # byte1=y (1..99)
+    # byte2=owner
+    # byte3=color
+    # byte4=type
+    out = []
+    n = len(data)
+    k = 0
+    while True:
+        o = BUILDING_TABLE_BASE + k * BUILDING_REC_SIZE
+        if o + 5 > n:
+            break
+        k +=1
+        t= data[o+4]
+        if t ==BUILDING_EMPTY_TYPE:
+            continue
+        x, y = data[o], data[o+1]
+        if not (1 <= x < GRID_W and 1 <= y < GRID_H):
+            continue
+        owner = data[o+2]
+        color = data[o+3]
+        if owner > MAX_OWNER or color > MAX_OWNER:
+            continue
+        name = []
+        for b in data[o+5:o+25]:
+            if 32<=b < 127:
+                name.append(chr(b))
+            else:
+                break
+        out.append({
+            "x": x, "y": y, "type": t, "owner": owner,
+            "offset": 0, "name": "".join(name),
+        })
+    return out
+
+    # for o in range(BUILDING_SCAN_START,n - 8):
+    #     x, y = data[o], data[o + 1]
+    #     if not (1 <= x < GRID_W and 1 <= y < GRID_H):
+    #         continue
+    #     owner = data[o + 2]
+    #     if owner > MAX_OWNER or data[o + 3] !=owner:
+    #         continue
+    #     if data[o + 4] != CASTLE_TYPE:
+    #         continue
+    #     if not (65 <= data[o + 5] < 123):  # nazwa powinna zaczynac sie litera
+    #         continue
+    #     name = []
+    #     for b in  data[o + 5: o + 25]:
+    #         if 32 <= b < 127:
+    #             name.append(chr(b))
+    #         else:
+    #             break
+    #         if len(name) < 3:
+    #             continue
+    #         out.append({
+    #             "x": x, "y": y, "type": CASTLE_TYPE,"owner": owner,
+    #             "offset": 0, "name": "".join(name),
+    #         })
+    # return out
+
+
 # ---------------- TILE ----------------
 class Tile:
     def __init__(self, raw=None):
@@ -272,6 +355,9 @@ class MapEditor(QGraphicsView):
         self.unit_tex_cache = {}
         self.sel_rect = None
 
+        self.buildings = []
+        self.building_tex_cache = {}
+
         self._nav_index = -1
         self._nav_owner = "unset"
 
@@ -305,6 +391,7 @@ class MapEditor(QGraphicsView):
                     self._add_tex(road, x, y)
 
         self.sel_rect = QGraphicsRectItem(0, 0, TILE_SIZE, TILE_SIZE)
+        self._draw_buildings()
         self._draw_units()
 
         self.sel_rect.setPen(QPen(QColor(255,0,0), 3))
@@ -312,6 +399,51 @@ class MapEditor(QGraphicsView):
         self.sel_rect.setVisible(False)
         self.scene.addItem(self.sel_rect)
         self._update_sel_rect()
+
+    def _building_variant(self):
+        """Numer warantu BUILDIN (1/2/3) wynikajacy z aktywnej palety."""
+        for ch in self.palette:
+            if ch.isdigit():
+                return ch
+        return "1"
+
+    def _building_pixmap(self, tex_id):
+        variant = self._building_variant()
+        key = (variant, tex_id)
+        if key in self.building_tex_cache:
+            return self.building_tex_cache[key]
+        folder = f"BUILDIN{variant}_S32"
+        path = os.path.join(BUILDING_TEX_DIR, folder, f"{folder}_{tex_id}.png")
+        pix = None
+        if os.path.exists(path):
+            p = QPixmap(path)
+            if not p.isNull():
+                pix = p
+        self.building_tex_cache[key] = pix
+        return pix
+
+    def _draw_buildings(self):
+        for b in self.buildings:
+            self._draw_building(b)
+
+    def _draw_building(self, building):
+        bx, by = building["x"], building["y"]
+        base = CASTLE_BASE_TEX + CASTLE_OWNER_TEX_STRIDE * building.get("owner", 0)
+        owner = building.get("owner", 0)
+        btype = building.get("type", 2)
+        size, base0, stride = BUILDING_TYPE_TEX.get(btype, BUILDING_DEFAULT_TEX)
+        base = base0 + stride * owner
+        for dy in range(size):
+            for dx in range(size):
+                x, y = bx + dx, by + dy
+                if x >= self.width or y >= self.height:
+                    continue
+                pix = self._building_pixmap(base + dx + size * dy)
+                if pix is None:
+                    continue
+                item = self.scene.addPixmap(pix)
+                item.setOffset(x * TILE_SIZE, y * TILE_SIZE)
+                item.setZValue(100)
 
 
     # ------------- UNITS -------------------
@@ -640,6 +772,7 @@ class MapEditor(QGraphicsView):
         with open(path, "rb") as f:
             self.raw_data = bytearray(f.read())
         self.units = find_units_in_data(self.raw_data)
+        self.buildings = find_buildings_in_data(self.raw_data)
         self._nav_index = -1
         self._nav_owner = "unset"
         self.draw_map()
