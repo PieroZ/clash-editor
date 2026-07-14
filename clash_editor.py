@@ -199,7 +199,6 @@ UNIT_INDEX_EMPTY = 0xFFFF
 
 
 def set_unit_index_cell(data, x, y, value):
-    return
     if data is None or not ( 0 <= x < GRID_W and 0 <= y < GRID_H ):
         return
     off = UNIT_INDEX_BASE + x * UNIT_INDEX_COL_STRIDE + y * 2
@@ -704,7 +703,7 @@ class MapEditor(QGraphicsView):
 
         reveal_fog_area(self.raw_data, x, y, owner)
 
-        k = (b - SQUAD_SLOT) // SQUAD_SLOT
+        k = (b - SQUAD_ANCHOR) // SQUAD_SLOT
         set_unit_index_cell(self.raw_data,x,y,k)
 
         squad = {
