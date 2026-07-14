@@ -8,3 +8,6 @@
 - Texture palette switching
 - Squad management
 - Binary patch saving
+## Installation
+- pip install -r requirements.txt
+- python clash_editor
