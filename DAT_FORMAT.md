@@ -88,9 +88,9 @@ Silnik **skanuje** sloty po zawartości – **brak licznika oddziałów** – sl
 - Slot jest **aktywnym oddziałem**, gdy: typ dowódcy `d[b+12]` ∈ 0..34 oraz `d[b+13]` == 0 (górny bajt `u16`), `d[b+10]` ≤ 4, `d[b+14]` = owner (kopia właściciela).
 - **Pusty slot**: `u16` w b+12 == 0xFFFF (lub zera) → 0 członków → nieaktywny.
 
-### 4.2. Rekord członka (31 bajtów)
+### 4.2. Rekord jednostki/członka oddziału (31 bajtów)
 
-Adres członka `j`: `0 = b + 12 + 31 * j` (do 10 członków; `0xFFFF` kończy listę).
+Adres członka oddziału `j`: `0 = b + 12 + 31 * j` (do 10 członków; `0xFFFF` kończy listę).
 
 | Offset w rekordzie | Nazwa | Znaczenie |
 |---|---|---|
