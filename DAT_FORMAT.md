@@ -101,7 +101,7 @@ Adres członka oddziału `j`: `0 = b + 12 + 31 * j` (do 10 członków; `0xFFFF` 
 | 0+9 | M_HP | Aktualne HP (maks. 100) |
 | 0+10 | M_FATIGUE | Zmęczenie |
 | 0+11 | M_MORALE | Morale (bazowo 10 lub 6) |
-| 0+12 | M_DAV | Zaawansowanie (młodszy półbajt `0x0F`; zachować starszy przy zapisie) |
+| 0+12 | M_ADV | Zaawansowanie (młodszy półbajt `0x0F`; zachować starszy przy zapisie) |
 | 0+13 |  | |
 
 - **Atak / pancerz / dystans / zdolności NIE są zapisywane per jednostka** – silnik wyprowadza je z typu i poziomu zaawansowania.
