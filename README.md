@@ -1,5 +1,8 @@
 # Clash Map Editor
 
+
+<img width="2560" height="1440" alt="EditorUpdateRoadsCastle" src="https://github.com/user-attachments/assets/fb110069-0d06-489e-b917-476668ea85c3" />
+
 ## Features
 - Open original Clash .DAT save files
 - Visual tile editor
