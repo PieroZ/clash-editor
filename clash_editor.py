@@ -8,8 +8,15 @@ from PySide6.QtWidgets import (
     QDockWidget, QListWidget, QListWidgetItem,
     QLabel, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QMainWindow, QToolBar, QSpinBox, QLineEdit, QCheckBox, QPushButton,
-    QGroupBox, QFileDialog, QComboBox, QTabWidget, QScrollArea, QPlainTextEdit
+    QGroupBox, QFileDialog, QComboBox, QTabWidget, QScrollArea, QPlainTextEdit,
+    QDialog, QMessageBox
 )
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import clash_mapgen
+except ImportError:          # generator jest opcjonalny
+    clash_mapgen = None
 from PySide6.QtGui import QPixmap, QIcon, QAction, QActionGroup, QPen, QColor, QFont
 from PySide6.QtCore import Qt, QSize, QDir
 
@@ -33,6 +40,50 @@ F_F5 = 5
 F_F6 = 6
 
 DEFAULT_ROAD = 0x0362
+
+# ---- Drogi: maska polaczen N=1, E=2, S=4, W=8 -> ID tekstury w polu "road".
+# Ustalone z istniejacych map (sasiedztwo) i z samych tekstur BACKGR*_S32.
+R_N, R_E, R_S, R_W = 1, 2, 4, 8
+ROAD_DIRS = {(0, -1): R_N, (1, 0): R_E, (0, 1): R_S, (-1, 0): R_W}
+ROAD_OPPOSITE = {R_N: R_S, R_S: R_N, R_E: R_W, R_W: R_E}
+
+
+def _road_set(es, sw, ne, nw, ns, ew, nes, nsw, new, esw, nesw, end_s, end_n, end_w, end_e):
+    return {
+        R_E | R_S: es, R_S | R_W: sw, R_N | R_E: ne, R_N | R_W: nw,
+        R_N | R_S: ns, R_E | R_W: ew,
+        R_N | R_E | R_S: nes, R_N | R_S | R_W: nsw, R_N | R_E | R_W: new,
+        R_E | R_S | R_W: esw, R_N | R_E | R_S | R_W: nesw,
+        R_S: end_s, R_N: end_n, R_W: end_w, R_E: end_e,
+    }
+
+
+ROAD_STYLES = {
+    "Polna": _road_set(819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829,
+                       949, 950, 951, 952),
+    "Błotna": _road_set(834, 835, 836, 837, 838, 839, 840, 841, 842, 843, 844,
+                        960, 959, 958, 957),
+    "Piaszczysta": _road_set(849, 850, 852, 854, 855, 856, 857, 858, 859, 860, 861,
+                             953, 954, 955, 956),
+    "Brukowana": _road_set(868, 870, 874, 876, 866, 867, 871, 873, 875, 869, 872,
+                           862, 863, 864, 865),
+}
+DEFAULT_ROAD_STYLE = "Polna"
+
+# ID -> (styl, maska); warianty (przejscia terenu, kamien, woda) mapujemy na
+# odpowiednie ksztalty, zeby dalo sie do nich dolaczac.
+ROAD_ID_INFO = {}
+for _style, _table in ROAD_STYLES.items():
+    for _mask, _tid in _table.items():
+        ROAD_ID_INFO[_tid] = (_style, _mask)
+for _tid, _style, _mask in [
+    (830, "Błotna", R_E | R_W), (831, "Błotna", R_E | R_W),
+    (832, "Błotna", R_N | R_S), (833, "Błotna", R_N | R_S),
+    (845, "Piaszczysta", R_N | R_S), (846, "Piaszczysta", R_N | R_S),
+    (847, "Piaszczysta", R_E | R_W), (848, "Piaszczysta", R_E | R_W),
+    (851, "Piaszczysta", R_S | R_W), (853, "Piaszczysta", R_N | R_E),
+]:
+    ROAD_ID_INFO[_tid] = (_style, _mask)
 
 FIELD_LABELS = [
     "Tekstura (0-1)",
@@ -738,6 +789,14 @@ class MapEditor(QGraphicsView):
         self._nav_index = -1
         self._nav_owner = "unset"
 
+        # rysowanie drog
+        self.road_style = DEFAULT_ROAD_STYLE
+        self.road_items = {}
+        self.road_masks = {}      # logiczne maski komorek edytowanych w tej sesji
+        self.road_undo = []
+        self._road_stroke = None  # {"last": (x,y), "erase": bool, "changed": {...}}
+        self.on_roads_changed = None
+
         self.setMouseTracking(True)
         self.draw_map()
 
@@ -747,9 +806,12 @@ class MapEditor(QGraphicsView):
         if pix:
             item = self.scene.addPixmap(pix)
             item.setOffset(x * TILE_SIZE, y * TILE_SIZE)
+            return item
+        return None
 
     def draw_map(self):
         self.scene.clear()
+        self.road_items = {}
 
         for x in range(self.width):
             for y in range(self.height):
@@ -765,7 +827,10 @@ class MapEditor(QGraphicsView):
 
                 road = tile.u16(F_ROAD)
                 if road != FIELD_NONE:
-                    self._add_tex(road, x, y)
+                    item = self._add_tex(road, x, y)
+                    if item is not None:
+                        item.setZValue(1)
+                        self.road_items[(x, y)] = item
 
         self.sel_rect = QGraphicsRectItem(0, 0, TILE_SIZE, TILE_SIZE)
         self._draw_buildings()
@@ -1237,21 +1302,187 @@ class MapEditor(QGraphicsView):
         self.map[x][y].tex_id = self.selected_tex
         self.draw_map()
 
+    # ---------------- DROGI ----------------
+    def _road_state(self, x, y):
+        """Zwraca (stan, maska): 'empty' - brak drogi, 'known' - znany kafelek
+        drogi, 'locked' - inny obiekt w polu drogi (np. most), nie ruszamy go."""
+        rid = self.map[x][y].u16(F_ROAD)
+        if rid == FIELD_NONE:
+            return "empty", 0
+        if (x, y) in self.road_masks:
+            return "known", self.road_masks[(x, y)]
+        info = ROAD_ID_INFO.get(rid)
+        if info is None:
+            return "locked", 0
+        return "known", info[1]
+
+    def _road_style_at(self, x, y):
+        info = ROAD_ID_INFO.get(self.map[x][y].u16(F_ROAD))
+        return info[0] if info else self.road_style
+
+    def _remember(self, x, y):
+        st = self._road_stroke
+        if st is not None and (x, y) not in st["changed"]:
+            st["changed"][(x, y)] = (
+                self.map[x][y].u16(F_ROAD),
+                self.road_masks.get((x, y), None),
+                (x, y) in self.road_masks,
+            )
+
+    def _set_road(self, x, y, mask, style=None):
+        """Ustawia logiczna maske polaczen i odpowiadajacy kafelek."""
+        self._remember(x, y)
+        style = style or self._road_style_at(x, y)
+        table = ROAD_STYLES[style]
+        # pojedynczy kafelek bez polaczen rysujemy jako odcinek prosty
+        tid = table.get(mask, table[R_N | R_S])
+        self.map[x][y].set_u16(F_ROAD, tid)
+        self.road_masks[(x, y)] = mask
+        self._refresh_road_item(x, y)
+
+    def _clear_road(self, x, y):
+        self._remember(x, y)
+        self.map[x][y].set_u16(F_ROAD, FIELD_NONE)
+        self.road_masks.pop((x, y), None)
+        self._refresh_road_item(x, y)
+
+    def _refresh_road_item(self, x, y):
+        old = self.road_items.pop((x, y), None)
+        if old is not None:
+            self.scene.removeItem(old)
+        rid = self.map[x][y].u16(F_ROAD)
+        if rid != FIELD_NONE:
+            item = self._add_tex(rid, x, y)
+            if item is not None:
+                item.setZValue(1)
+                self.road_items[(x, y)] = item
+
+    def _road_place(self, x, y):
+        state, _ = self._road_state(x, y)
+        if state == "empty":
+            self._set_road(x, y, 0, self.road_style)
+
+    def _road_connect(self, a, b):
+        d = ROAD_DIRS.get((b[0] - a[0], b[1] - a[1]))
+        if d is None:
+            return
+        for cell, bit in ((a, d), (b, ROAD_OPPOSITE[d])):
+            state, mask = self._road_state(*cell)
+            if state == "locked":
+                continue
+            if state == "empty":
+                self._set_road(cell[0], cell[1], bit, self.road_style)
+            elif not mask & bit:
+                self._set_road(cell[0], cell[1], mask | bit)
+
+    def _road_erase(self, x, y):
+        state, _ = self._road_state(x, y)
+        if state == "empty":
+            return
+        for (dx, dy), bit in ROAD_DIRS.items():
+            nx, ny = x + dx, y + dy
+            if not (0 <= nx < self.width and 0 <= ny < self.height):
+                continue
+            nstate, nmask = self._road_state(nx, ny)
+            opp = ROAD_OPPOSITE[bit]
+            if nstate == "known" and nmask & opp:
+                self._set_road(nx, ny, nmask & ~opp)
+        self._clear_road(x, y)
+
+    @staticmethod
+    def _grid_path(a, b):
+        """Kafelki od a do b (bez a) z ruchem tylko w pionie/poziomie."""
+        x, y = a
+        out = []
+        while (x, y) != b:
+            dx, dy = b[0] - x, b[1] - y
+            if abs(dx) >= abs(dy):
+                x += 1 if dx > 0 else -1
+            else:
+                y += 1 if dy > 0 else -1
+            out.append((x, y))
+        return out
+
+    def road_begin(self, cell, erase=False):
+        self._road_stroke = {"last": cell, "erase": erase, "changed": {}}
+        if erase:
+            self._road_erase(*cell)
+        else:
+            self._road_place(*cell)
+
+    def road_extend(self, cell):
+        st = self._road_stroke
+        if st is None or cell == st["last"]:
+            return
+        prev = st["last"]
+        for step in self._grid_path(prev, cell):
+            if st["erase"]:
+                self._road_erase(*step)
+            else:
+                self._road_connect(prev, step)
+            prev = step
+        st["last"] = cell
+
+    def road_end(self):
+        st = self._road_stroke
+        self._road_stroke = None
+        if st and st["changed"]:
+            self.road_undo.append(st["changed"])
+            del self.road_undo[:-50]
+            self._roads_changed(st["changed"].keys())
+
+    def road_undo_last(self):
+        if not self.road_undo:
+            return False
+        changed = self.road_undo.pop()
+        for (x, y), (rid, mask, had_mask) in changed.items():
+            self.map[x][y].set_u16(F_ROAD, rid)
+            if had_mask:
+                self.road_masks[(x, y)] = mask
+            else:
+                self.road_masks.pop((x, y), None)
+            self._refresh_road_item(x, y)
+        self._roads_changed(changed.keys())
+        return True
+
+    def _roads_changed(self, cells):
+        if self.selected_cell in set(cells) and self.inspector:
+            x, y = self.selected_cell
+            self.inspector.load_tile(x, y, self.map[x][y])
+        if self.on_roads_changed:
+            self.on_roads_changed()
+
     def mousePressEvent(self, event):
         cell = self._cell_at(event)
         if not cell:
             return
         x, y = cell
+        if self.mode == "road":
+            if event.button() in (Qt.LeftButton, Qt.RightButton):
+                self.road_begin(cell, erase=event.button() == Qt.RightButton)
+            return
         if self.mode == "paint":
             self.paint_tile(x, y)
         else:
             self.select_cell(x, y)
 
     def mouseMoveEvent(self, event):
+        if self.mode == "road":
+            if self._road_stroke is not None:
+                cell = self._cell_at(event)
+                if cell:
+                    self.road_extend(cell)
+            return
         if self.mode == "paint" and (event.buttons() & Qt.LeftButton):
             cell = self._cell_at(event)
             if cell:
                 self.paint_tile(*cell)
+
+    def mouseReleaseEvent(self, event):
+        if self.mode == "road" and self._road_stroke is not None:
+            self.road_end()
+            return
+        super().mouseReleaseEvent(event)
 
     def set_selected_texture(self, tex_id):
         self.selected_tex = tex_id
@@ -1266,6 +1497,8 @@ class MapEditor(QGraphicsView):
 
 
     def tile_changed(self, x, y):
+        # recznie zmienione pole drogi - maske odczytamy ponownie z ID
+        self.road_masks.pop((x, y), None)
         self.draw_map()
 
     # ---------------- LOAD (full 14-byte records) ----------------
@@ -1282,7 +1515,81 @@ class MapEditor(QGraphicsView):
                     self.map[x][y] = Tile(data)
         self.draw_map()
 
+    # ---------------- GENERATOR MAPY ----------------
+    def _reserved_cells(self):
+        """Pola zajete przez budynki i oddzialy - generator zostawia tam trawe."""
+        cells = set()
+        for b in self.buildings:
+            s = building_size(b["type"])
+            for dx in range(s):
+                for dy in range(s):
+                    cells.add((b["x"] + dx, b["y"] + dy))
+        for sq in self.units:
+            cells.add((sq["x"], sq["y"]))
+        return cells
+
+    def _road_targets(self):
+        """Pole tuz pod kazdym budynkiem - tam dochodza generowane drogi."""
+        out = []
+        for b in self.buildings:
+            s = building_size(b["type"])
+            x, y = b["x"], b["y"] + s
+            if 0 <= x < self.width and 0 <= y < self.height:
+                out.append((x, y))
+        return out
+
+    def generate_map(self, params):
+        if clash_mapgen is None:
+            raise RuntimeError("Brak modulu clash_mapgen.py")
+        if not hasattr(self, "_mapgen"):
+            self._mapgen = clash_mapgen.MapGenerator()
+        reserved = self._reserved_cells()
+        targets = self._road_targets()
+        res = self._mapgen.generate(params, keep_clear=reserved | set(targets),
+                                    road_targets=targets)
+        # kopia do "Przywroc poprzednia"
+        self.gen_undo = [[bytes(self.map[x][y].raw) for y in range(self.height)]
+                         for x in range(self.width)]
+        for (x, y), (tex, ovl) in res["tiles"].items():
+            t = Tile()
+            t.set_u16(F_TEX, tex)
+            t.set_u16(F_OVERLAY1, ovl)
+            t.set_u16(F_ROAD, FIELD_NONE)
+            self.map[x][y] = t
+        self.road_masks = {}
+        self.road_undo = []
+        # drogi: styl wg terenu pod droga
+        style_for = {"S": "Piaszczysta", "D": "Błotna"}
+        saved_style = self.road_style
+        labels = res["labels"]
+        for path in res["roads"]:
+            for a, b in zip(path, path[1:]):
+                self.road_style = style_for.get(labels.get(b), "Polna")
+                self._road_connect(a, b)
+        self.road_style = saved_style
+        self.draw_map()
+        if self.selected_cell and self.inspector:
+            x, y = self.selected_cell
+            self.inspector.load_tile(x, y, self.map[x][y])
+        return res
+
+    def restore_before_generate(self):
+        snap = getattr(self, "gen_undo", None)
+        if not snap:
+            return False
+        for x in range(self.width):
+            for y in range(self.height):
+                self.map[x][y] = Tile(snap[x][y])
+        self.gen_undo = None
+        self.road_masks = {}
+        self.road_undo = []
+        self.draw_map()
+        return True
+
     def load_file(self, path):
+        self.road_masks = {}
+        self.road_undo = []
+        self._road_stroke = None
         self.load_dat(path)
         self.load_units(path)
 
@@ -2183,6 +2490,111 @@ class CastleEditorPanel(QDockWidget):
         self._after_change()
 
 
+# ---------------- GENERATOR DIALOG ---------------
+class MapGeneratorDialog(QDialog):
+    """Parametry generatora; okno zostaje otwarte, zeby latwo losowac kolejne mapy."""
+
+    def __init__(self, editor, parent=None):
+        super().__init__(parent)
+        self.editor = editor
+        self.setWindowTitle("Generator losowej mapy")
+        root = QVBoxLayout(self)
+
+        form = QFormLayout()
+        seed_row = QHBoxLayout()
+        self.seed = QSpinBox()
+        self.seed.setRange(0, (1 << 30) - 1)
+        self.seed.setValue(clash_mapgen.GenParams().seed if clash_mapgen else 1)
+        seed_row.addWidget(self.seed)
+        rnd = QPushButton("Losuj")
+        rnd.clicked.connect(self._new_seed)
+        seed_row.addWidget(rnd)
+        form.addRow("Ziarno", seed_row)
+
+        def pct(v, hi=50):
+            s = QSpinBox()
+            s.setRange(0, hi)
+            s.setSuffix(" %")
+            s.setValue(v)
+            return s
+        self.water = pct(12)
+        form.addRow("Woda", self.water)
+        self.sand = pct(12)
+        form.addRow("Piasek", self.sand)
+        self.dirt = pct(6, 30)
+        form.addRow("Ziemia", self.dirt)
+        self.forests = QSpinBox()
+        self.forests.setRange(0, 60)
+        self.forests.setValue(12)
+        form.addRow("Lasy (sztuk)", self.forests)
+        self.rocks = QSpinBox()
+        self.rocks.setRange(0, 40)
+        self.rocks.setValue(6)
+        form.addRow("Skały (sztuk)", self.rocks)
+        self.smooth = QSpinBox()
+        self.smooth.setRange(0, 6)
+        self.smooth.setValue(2)
+        form.addRow("Wygładzanie", self.smooth)
+        self.roads = QCheckBox("Drogi między budynkami")
+        self.roads.setChecked(True)
+        form.addRow("", self.roads)
+        root.addLayout(form)
+
+        info = QLabel("Zamki, wieże i oddziały zostają na miejscu - teren pod nimi "
+                      "jest zawsze trawą. Zmieniana jest tylko siatka kafelków.")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        root.addWidget(self.status)
+
+        btns = QHBoxLayout()
+        gen = QPushButton("Generuj")
+        gen.setDefault(True)
+        gen.clicked.connect(self._generate)
+        btns.addWidget(gen)
+        again = QPushButton("Losuj i generuj")
+        again.clicked.connect(lambda: (self._new_seed(), self._generate()))
+        btns.addWidget(again)
+        self.undo = QPushButton("Przywróć poprzednią")
+        self.undo.setEnabled(False)
+        self.undo.clicked.connect(self._restore)
+        btns.addWidget(self.undo)
+        close = QPushButton("Zamknij")
+        close.clicked.connect(self.close)
+        btns.addWidget(close)
+        root.addLayout(btns)
+
+    def _new_seed(self):
+        import random as _r
+        self.seed.setValue(_r.randrange(1 << 30))
+
+    def params(self):
+        return clash_mapgen.GenParams(
+            seed=self.seed.value(), water=self.water.value() / 100,
+            sand=self.sand.value() / 100, dirt=self.dirt.value() / 100,
+            forests=self.forests.value(), rocks=self.rocks.value(),
+            roads=self.roads.isChecked(), smoothness=self.smooth.value())
+
+    def _generate(self):
+        try:
+            res = self.editor.generate_map(self.params())
+        except Exception as e:      # brak pliku danych itp.
+            QMessageBox.warning(self, "Generator", str(e))
+            return
+        st = res["stats"]
+        self.status.setText(
+            f"Ziarno {self.seed.value()}: lasy {st['forests']}, skały {st['rocks']}, "
+            f"drogi {len(res['roads'])}. Zapisz przyciskiem „Save Patch”.")
+        self.undo.setEnabled(True)
+
+    def _restore(self):
+        if self.editor.restore_before_generate():
+            self.status.setText("Przywrócono mapę sprzed generowania.")
+        self.undo.setEnabled(False)
+
+
 # ---------------- TILE INSPECTOR ---------------
 class TileInspector(QDockWidget):
     def __init__(self, editor):
@@ -2446,6 +2858,33 @@ class MainWindow(QMainWindow):
         group.addAction(paint_action)
         tb.addAction(paint_action)
 
+        road_action = QAction("Droga", self, checkable=True)
+        road_action.setToolTip("Lewy przycisk + przeciąganie: rysuj drogę\n"
+                               "Prawy przycisk + przeciąganie: usuń drogę")
+        road_action.triggered.connect(self._enter_road_mode)
+        group.addAction(road_action)
+        tb.addAction(road_action)
+
+        self.road_style_combo = QComboBox()
+        self.road_style_combo.addItems(list(ROAD_STYLES.keys()))
+        self.road_style_combo.setCurrentText(self.editor.road_style)
+        self.road_style_combo.setToolTip("Styl nowych odcinków drogi (istniejące "
+                                         "kafelki zachowują swój styl)")
+        self.road_style_combo.currentTextChanged.connect(
+            lambda s: setattr(self.editor, "road_style", s))
+        tb.addWidget(self.road_style_combo)
+
+        undo_action = QAction("Cofnij drogę", self)
+        undo_action.setShortcut("Ctrl+Z")
+        undo_action.triggered.connect(self.undo_road)
+        tb.addAction(undo_action)
+
+        tb.addSeparator()
+        gen_action = QAction("Generuj mapę...", self)
+        gen_action.triggered.connect(self.open_generator)
+        gen_action.setEnabled(clash_mapgen is not None)
+        tb.addAction(gen_action)
+
         tb.addSeparator()
 
         save_action = QAction("Save Patch", self)
@@ -2482,6 +2921,21 @@ class MainWindow(QMainWindow):
             )
 
 
+
+    def open_generator(self):
+        if getattr(self, "gen_dialog", None) is None:
+            self.gen_dialog = MapGeneratorDialog(self.editor, self)
+        self.gen_dialog.show()
+        self.gen_dialog.raise_()
+
+    def _enter_road_mode(self):
+        self.editor.set_mode("road")
+        self.statusBar().showMessage(
+            "Tryb drogi: lewy przycisk - rysuj, prawy - usuń, Ctrl+Z - cofnij", 5000)
+
+    def undo_road(self):
+        if not self.editor.road_undo_last():
+            self.statusBar().showMessage("Brak zmian dróg do cofnięcia", 3000)
 
     def next_castle(self):
         idx = self.player_combo.currentIndex()
