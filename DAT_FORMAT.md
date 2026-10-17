@@ -141,6 +141,38 @@ Budynki **nie** są zapisane w siatce kafelków. Łączą w osobnej **tabeli o s
 | 0+4 | **Typ** (0/1/2; **0xFF** = pusty slot + point) |
 | 0+5 | Opcjonalna nazwa ASCII zakończona `0x00`, dalej garnizon (jednostki, krok 31 B) |
 
+### 6.1a. Pełny układ rekordu budynku (467 B)
+
+(`Pieniadze`, `IloscChlopow`, `PoziomTech`, `Prisoner_*`, `CanProduce`, debugowy wydruk zamku). Offsety względem początku rekordu.
+
+| Offset | Rozmiar | Znaczenie |
+|---|---|---|
+| 0x000 | 1 | X |
+| 0x001 | 1 | Y |
+| 0x002 | 1 | Właściciel (0-4) – kolor |
+| 0x003 | 1 | Styl grafiki (część klucza cache grafiki; zwykle = właściciel) |
+| 0x004 | 1 | Typ: 0 wieża, 1 twierdza, 2 zamek, 0xFF pusty |
+| 0x005 | 11 | Nazwa ASCII zakończona 0x00 |
+| 0x010 | i16 | Pozostałe punkty budowy (0 = ukończony; maks. 100 wieża / 300 twierdza i zamek; -1 = brak) |
+| 0x012 | 12 x 31 | **Garnizon** – rekordy jednostek jak w oddziale; typ `0xFFFF` = pusty slot. Sloty mogą być rzadkie – gra liczy wszystkie 12 |
+| 0x186 | 12 | Stan każdej jednostki garnizonu (bity leczenia / szkolenia) |
+| 0x192 | 12 | **Licencje** – typy jednostek, które zamek może produkować; 0xFF = brak |
+| 0x19E | 1 | Produkcja: indeks licencji (0..11), 0xFF = nic |
+| 0x19F | 1 | Produkcja: tury do końca |
+| 0x1A0 | 1 | **Budynki w zamku**: 0x01 szpital, 0x02 koszary, 0x04 warsztat, 0x08 szkoła, 0x10 kuźnia |
+| 0x1A5 | 1 | Poziom murów (0..2; gra pozwala maks. poziom zamku − 1) |
+| 0x1A6 | 7 | Wytrzymałość segmentów murów (0..100) |
+| 0x1AD | 1 | Tury do końca rozbudowy murów |
+| 0x1AE | u16 | **Chłopi** – młodsze 12 bitów |
+| 0x1B2 | i8 | Zadowolenie |
+| 0x1B4 | 1 | Podatek – młodsze 6 bitów |
+| 0x1B6 | u32 | **Złoto** w skarbcu zamku |
+| 0x1BC | 1 | **Poziom zaawansowania** – młodsze 3 bity (w grze 1..4) |
+| 0x1BD | 3 x 6 | **Więźniowie**: bajt 0 typ (33 syn / 34 córka dowódcy, 0xFF = pusta cela), bajt 1 pierwotny właściciel, bajt 2 tury w niewoli (gra usuwa więźnia przy 10) |
+| 0x1CF | u32 | Wskaźnik runtime (odbudowywany przy wczytaniu) |
+
+Wymogi produkcji (CanProduce): typ budynku 0 nie produkuje; minimalny poziom zależy od typu jednostki i od tego, czy budynek ma typ 2; kuźnia jest wymagana dla typów 2, 4, 5, 6, 7, 8, 11, 14, warsztat dla 9, 10, 12, 13, 15.
+
 ### 6.2. Typ, rozmiar i tekstury
 
 Kolor budynku wyznacza **Właściciel** (0+2), a rodzaj – **typ** (0+4):
